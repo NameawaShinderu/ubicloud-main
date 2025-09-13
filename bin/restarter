@@ -1,0 +1,56 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+minimum_time_alive = Integer(ENV.fetch("RESTART_MINIMUM_TIME_ALIVE", "3600"), 10)
+require "json"
+
+command = ARGV.dup.freeze
+start_time = Time.now
+shutting_down = false
+
+iso_start = start_time.utc.strftime("%Y-%m-%dT%H:%M:%S%:z").freeze
+puts JSON.generate(restarter: {
+  start_time: iso_start,
+  startup: {
+    command:,
+    minimum_time_alive:
+  }
+})
+
+loop do
+  pid = Process.spawn(*command)
+  Signal.trap("TERM") do
+    Process.kill(:TERM, pid)
+    shutting_down = true
+  end
+  Process.wait(pid)
+  status = $?
+
+  # Extra newline to prevent blending with subprocess just in
+  # case. Done as a separate system call, to be extra-accommodating to
+  # loggers that may want process things one system call at a time:
+  # below PIPE_BUF each write() matches with a read().
+  puts
+
+  puts JSON.generate(restarter: {
+    start_time: iso_start,
+    command_exit: {
+      command:,
+      exitstatus: status.exitstatus,
+      pid: status.pid,
+      success: status.success?
+    }
+  })
+  exit status.exitstatus if shutting_down
+
+  sleep(rand(1..10))
+
+  if Time.now - start_time > minimum_time_alive
+    puts JSON.generate(restarter: {start_time: iso_start,
+                                   shutdown: {
+                                     command:,
+                                     minimum_time_alive:
+                                   }})
+    exit
+  end
+end

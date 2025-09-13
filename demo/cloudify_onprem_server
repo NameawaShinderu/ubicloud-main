@@ -1,0 +1,395 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+REPL = true
+
+require_relative "../loader"
+require "timeout"
+require "ipaddr"
+
+def get_input(msg, default = nil)
+  prompt = "#{msg}#{default.nil? ? "" : " [default: #{default}]"}: "
+  input = ""
+
+  while input.empty?
+    print prompt
+    input = gets.chomp
+    input = default if input.empty? && !default.nil?
+  end
+
+  input
+end
+
+def validate_ssh_connection(hostname, ssh_key_path)
+  puts "🔑 Testing SSH connection to #{hostname}..."
+  
+  begin
+    # Expand path and check key exists
+    key_path = File.expand_path(ssh_key_path)
+    unless File.exist?(key_path)
+      puts "❌ SSH key not found at #{key_path}"
+      return false
+    end
+
+    # Test SSH connection with timeout
+    result = `ssh -i #{key_path} -o ConnectTimeout=10 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null root@#{hostname} 'echo "SSH_CONNECTION_SUCCESS"' 2>/dev/null`
+    
+    if $?.success? && result.strip == "SSH_CONNECTION_SUCCESS"
+      puts "✅ SSH connection successful"
+      return true
+    else
+      puts "❌ SSH connection failed"
+      puts "   Make sure:"
+      puts "   1. Root SSH access is enabled on the server"
+      puts "   2. Your public key is in /root/.ssh/authorized_keys"
+      puts "   3. The server is reachable from this machine"
+      return false
+    end
+  rescue => e
+    puts "❌ SSH connection error: #{e.message}"
+    return false
+  end
+end
+
+def check_server_requirements(hostname, ssh_key_path)
+  puts "🔍 Checking server requirements..."
+  
+  key_path = File.expand_path(ssh_key_path)
+  
+  checks = [
+    {
+      name: "Operating System",
+      command: "lsb_release -d 2>/dev/null || echo 'Unknown'",
+      validate: ->(output) { 
+        output.include?("Ubuntu 24.04") || output.include?("Ubuntu 22.04") 
+      },
+      required: true
+    },
+    {
+      name: "Memory (minimum 8GB)",
+      command: "free -g | awk '/^Mem:/{print $2}'",
+      validate: ->(output) { output.to_i >= 8 },
+      required: true
+    },
+    {
+      name: "CPU Virtualization",
+      command: "grep -c -E '(vmx|svm)' /proc/cpuinfo",
+      validate: ->(output) { output.to_i > 0 },
+      required: true
+    },
+    {
+      name: "Storage Devices",
+      command: "lsblk -d | grep -c disk",
+      validate: ->(output) { output.to_i >= 1 },
+      required: true
+    },
+    {
+      name: "IPv6 Support",
+      command: "ip -6 addr show | grep -c inet6",
+      validate: ->(output) { output.to_i > 1 },  # More than just loopback
+      required: false
+    },
+    {
+      name: "Internet Connectivity",
+      command: "curl -s --max-time 10 http://google.com > /dev/null && echo 'OK' || echo 'FAIL'",
+      validate: ->(output) { output.strip == 'OK' },
+      required: true
+    }
+  ]
+  
+  all_required_passed = true
+  warnings = []
+  
+  checks.each do |check|
+    print "  Checking #{check[:name]}... "
+    
+    result = `ssh -i #{key_path} -o ConnectTimeout=15 root@#{hostname} '#{check[:command]}' 2>/dev/null`
+    
+    if $?.success? && check[:validate].call(result)
+      puts "✅ PASS"
+    else
+      if check[:required]
+        puts "❌ FAIL (#{result.strip})"
+        all_required_passed = false
+      else
+        puts "⚠️  WARN (#{result.strip})"
+        warnings << check[:name]
+      end
+    end
+  end
+  
+  unless warnings.empty?
+    puts "\n⚠️  Warnings for: #{warnings.join(', ')}"
+    puts "   These may cause issues but won't prevent cloudification"
+  end
+  
+  unless all_required_passed
+    puts "\n❌ Required checks failed. Please fix the issues above before proceeding."
+  end
+  
+  all_required_passed
+end
+
+def validate_ipv6_subnet(subnet_str)
+  begin
+    # Parse and validate IPv6 subnet
+    ipv6_net = IPAddr.new(subnet_str)
+    
+    unless ipv6_net.ipv6?
+      puts "❌ Not a valid IPv6 address: #{subnet_str}"
+      return nil
+    end
+    
+    # Check if it's a reasonable subnet size for VMs
+    prefix_length = subnet_str.split('/')[1].to_i
+    if prefix_length > 64
+      puts "⚠️  Subnet prefix /#{prefix_length} might be too small for multiple VMs"
+      print "Continue anyway? (y/N): "
+      return nil unless gets.chomp.downcase == 'y'
+    end
+    
+    puts "✅ IPv6 subnet validated: #{ipv6_net}"
+    ipv6_net
+  rescue => e
+    puts "❌ Invalid IPv6 subnet format: #{e.message}"
+    nil
+  end
+end
+
+# Main execution
+puts ""
+puts "🌟 UbiCloud On-Premises Server Cloudification"
+puts "=" * 60
+puts ""
+
+# Collect server information
+puts "📋 Server Information"
+hostname = get_input("Server hostname/IP address")
+host_id = get_input("Unique server identifier", hostname.gsub('.', '-'))
+ssh_key_path = get_input("SSH private key path", "~/.ssh/ubicloud_onprem")
+
+puts ""
+puts "🌐 Network Configuration"
+puts "UbiCloud requires IPv6 networking for VM operations."
+puts "Examples:"
+puts "  - Native IPv6: 2001:db8:1234::/64"
+puts "  - HE Tunnel:   2001:470:xxxx:xxxx::/64"
+puts "  - ULA Testing: fd00:ubicloud:onprem::/64"
+puts ""
+
+ipv6_subnet = nil
+while ipv6_subnet.nil?
+  subnet_input = get_input("IPv6 subnet for VMs", "fd00:ubicloud:onprem::/64")
+  ipv6_subnet = validate_ipv6_subnet(subnet_input)
+end
+
+puts ""
+puts "🔐 Validation Phase"
+puts "-" * 30
+
+# Validate SSH connection
+unless validate_ssh_connection(hostname, ssh_key_path)
+  puts ""
+  puts "❌ Cannot proceed without SSH access. Please fix the connection issues."
+  puts ""
+  puts "Troubleshooting tips:"
+  puts "1. Ensure the server allows root SSH login"
+  puts "2. Add your public key to /root/.ssh/authorized_keys on the server"
+  puts "3. Check firewall settings on both machines"
+  puts "4. Verify the SSH key path is correct"
+  exit 1
+end
+
+# Check server requirements
+unless check_server_requirements(hostname, ssh_key_path)
+  puts ""
+  puts "❌ Server requirements not met. Please address the issues above."
+  exit 1
+end
+
+puts ""
+puts "✅ All validations passed!"
+puts ""
+puts "📝 Configuration Summary"
+puts "-" * 30
+puts "Server: #{hostname}"
+puts "ID: #{host_id}"
+puts "IPv6 Subnet: #{ipv6_subnet}"
+puts "SSH Key: #{File.expand_path(ssh_key_path)}"
+puts ""
+
+print "Proceed with cloudification? (Y/n): "
+response = gets.chomp
+exit 0 if response.downcase == 'n'
+
+puts ""
+puts "🚀 Starting Cloudification Process"
+puts "=" * 50
+
+# Find or create location
+location = Location.find_or_create(provider: "onprem", name: "onprem-01") do |loc|
+  loc.display_name = "On-Premises Data Center"
+  loc.visible = true
+end
+
+puts "📍 Using location: #{location.display_name} (ID: #{location.id})"
+
+# Check if server is already cloudified
+existing_host = VmHost
+  .where(id: Sshable.where(host: hostname).select(:id))
+  .where(location_id: location.id)
+  .first
+
+if existing_host
+  puts "⚠️  Found existing cloudified server: #{existing_host.id}"
+  print "Re-cloudify this server? (y/N): "
+  if gets.chomp.downcase != 'y'
+    puts "Exiting without changes."
+    exit 0
+  end
+  puts "🔄 Re-cloudifying existing server..."
+  strand = existing_host.strand
+else
+  puts "🆕 Creating new server configuration..."
+  
+  # Create new VM host entry
+  begin
+    strand = DB.transaction do
+      id = VmHost.generate_uuid
+      
+      # Create sshable entry
+      Sshable.create_with_id(id, host: hostname)
+      
+      # Create VM host
+      vmh = VmHost.create_with_id(id,
+        location_id: location.id,
+        family: "standard",
+        net6: ipv6_subnet.to_s,
+        ndp_needed: false
+      )
+      
+      # Create provider entry
+      HostProvider.create do |hp|
+        hp.id = id
+        hp.provider_name = HostProvider::ONPREM_PROVIDER_NAME
+        hp.server_identifier = host_id
+      end
+      
+      # Create address entries
+      Address.create_with_id(id, cidr: hostname, routed_to_host_id: id)
+      AssignedHostAddress.create(ip: hostname, address_id: id, host_id: id)
+      
+      # Create cloudification strand
+      Strand.create_with_id(id,
+        prog: "Vm::HostNexus",
+        label: "start",
+        stack: [{
+          "spdk_version" => Config.spdk_version,
+          "default_boot_images" => ["ubuntu-noble", "ubuntu-jammy"]
+        }]
+      )
+    end
+    
+    puts "✅ Server configuration created (ID: #{strand.id})"
+  rescue => e
+    puts "❌ Failed to create server configuration: #{e.message}"
+    exit 1
+  end
+end
+
+# Monitor cloudification progress
+puts ""
+puts "⏳ Cloudification in Progress"
+puts "This process typically takes 30-45 minutes..."
+puts "Progress will be shown below:"
+puts ""
+
+begin
+  Timeout.timeout(60 * 60) do  # 60 minute timeout
+    last_state = nil
+    start_time = Time.now
+    dots = ""
+    
+    while (current_state = strand.reload.label) != "wait"
+      if last_state != current_state
+        elapsed = ((Time.now - start_time) / 60).round(1)
+        puts "#{Time.now.strftime('%H:%M:%S')} [#{elapsed}m] #{current_state.upcase}"
+        last_state = current_state
+        dots = ""
+        
+        # Provide helpful context for certain states
+        case current_state
+        when "bootstrap_rhizome"
+          puts "   └── Installing UbiCloud host management software..."
+        when "prep"
+          puts "   └── Preparing host (discovering hardware, installing components)..."
+        when "setup_spdk"
+          puts "   └── Setting up high-performance storage system..."
+        when "download_boot_images"
+          puts "   └── Downloading VM boot images (this may take a while)..."
+        when "reboot"
+          puts "   └── Rebooting server to apply kernel changes..."
+        end
+      else
+        print "."
+        dots += "."
+        if dots.length >= 60
+          elapsed = ((Time.now - start_time) / 60).round(1)
+          puts " [#{elapsed}m]"
+          dots = ""
+        end
+      end
+      
+      sleep 5
+    end
+    
+    total_time = ((Time.now - start_time) / 60).round(1)
+    puts ""
+    puts "🎉 Cloudification completed successfully in #{total_time} minutes!"
+    
+  end
+rescue Timeout::Error
+  elapsed = 60
+  puts ""
+  puts "⏰ Cloudification process timed out after #{elapsed} minutes"
+  puts ""
+  puts "Current state: #{strand.reload.label}"
+  puts "Server ID: #{strand.id}"
+  puts ""
+  puts "This doesn't necessarily mean it failed - the process might still be running."
+  puts "You can check the server status in the UbiCloud web interface or by running:"
+  puts "  docker-compose -f demo/docker-compose.yml logs -f app"
+  puts ""
+  puts "To check if cloudification completed later:"
+  puts "  ssh root@#{hostname} 'systemctl status spdk-*'"
+  exit 1
+rescue Interrupt
+  puts ""
+  puts "⏹️  Cloudification interrupted by user"
+  puts "The process may continue in the background."
+  puts "Server ID for reference: #{strand.id}"
+  exit 1
+end
+
+puts ""
+puts "🎊 SUCCESS! Your server has been cloudified!"
+puts "=" * 50
+puts ""
+puts "✅ Server Details:"
+puts "   • Server ID: #{strand.id}"
+puts "   • Hostname: #{hostname}"
+puts "   • Location: On-Premises Data Center"
+puts "   • IPv6 Subnet: #{ipv6_subnet}"
+puts ""
+puts "🚀 Next Steps:"
+puts "   1. Open UbiCloud dashboard: http://localhost:3000"
+puts "   2. Navigate to Virtual Machines"
+puts "   3. Click 'Create VM' and select 'On-Premises Data Center'"
+puts "   4. Create your first VM!"
+puts ""
+puts "📚 Additional Resources:"
+puts "   • Server logs: ssh root@#{hostname} 'journalctl -f'"
+puts "   • SPDK status: ssh root@#{hostname} 'systemctl status spdk-*'"
+puts "   • UbiCloud logs: docker-compose -f demo/docker-compose.yml logs -f"
+puts ""
+puts "🎉 Welcome to your private cloud!"

@@ -1,0 +1,2 @@
+allow_alter_system=off
+allow_in_place_tablespaces=on

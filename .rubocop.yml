@@ -1,0 +1,110 @@
+# Modified from https://www.fastruby.io/blog/ruby/code-quality/how-we-use-rubocop-and-standardrb.html
+require:
+  - rubocop-capybara
+  - standard
+
+plugins:
+  - rubocop-erb
+  - rubocop-performance
+  - rubocop-rake
+  - rubocop-rspec
+  - rubocop-sequel
+
+inherit_gem:
+  standard: config/base.yml
+
+AllCops:
+  TargetRubyVersion: 3.4
+  NewCops: enable
+  Exclude:
+    - public/**/*
+    - vendor/**/*
+    - node_modules/**/*
+    - coverage/views/*
+
+RSpec:
+  Enabled: true
+
+Performance:
+  Enabled: true
+
+Rake:
+  Enabled: true
+
+Sequel:
+  Enabled: true
+
+# Seems to be buggy and flags non-redundant line continuations as redundant
+Style/RedundantLineContinuation:
+  Enabled: false
+
+RSpec/DescribeMethod:
+  Enabled: false
+
+Style/FrozenStringLiteralComment:
+  Enabled: true
+
+Style/BlockComments:
+  Enabled: false
+
+Layout/HeredocIndentation:
+  Enabled: false
+
+Layout/SpaceInsideHashLiteralBraces:
+  Exclude:
+    - 'views/**/*.erb'
+
+Layout/EmptyLinesAroundMethodBody:
+  Enabled: false
+
+Lint/UnderscorePrefixedVariableName:
+  Enabled: false
+
+RSpec/AnyInstance:
+  Enabled: false
+
+RSpec/ExampleLength:
+  Enabled: false
+
+RSpec/MultipleExpectations:
+  Enabled: false
+
+RSpec/StubbedMock:
+  Enabled: false
+
+RSpec/MessageSpies:
+  Enabled: false
+
+RSpec/SubjectStub:
+  Enabled: false
+
+RSpec/ExpectInHook:
+  Enabled: false
+
+RSpec/InstanceVariable:
+  Enabled: false
+
+RSpec/SpecFilePathFormat:
+  Exclude:
+    - 'spec/routes/**/*.rb'
+
+RSpec/MultipleMemoizedHelpers:
+  Enabled: false
+
+Sequel/IrreversibleMigration:
+  Enabled: false
+
+Capybara/ClickLinkOrButtonStyle:
+  EnforcedStyle: strict
+
+Lint/UselessTimes:
+  Enabled: false
+
+Lint/ConstantDefinitionInBlock:
+  Enabled: false
+
+RSpec/IndexedLet:
+  Enabled: false
+
+RSpec/NestedGroups:
+  Enabled: false

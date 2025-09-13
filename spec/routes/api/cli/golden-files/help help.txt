@@ -1,0 +1,8 @@
+Get command help
+
+Usage:
+    ubi help [options] [command [subcommand]]
+
+Options:
+    -r, --recursive                  also show documentation for all subcommands of command
+    -u, --usage                      only show usage

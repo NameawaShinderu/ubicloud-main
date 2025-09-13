@@ -1,0 +1,2 @@
+ubi vm command [...]
+ubi vm (location/vm-name | vm-id) [post-options] post-command [...]

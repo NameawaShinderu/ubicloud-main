@@ -1,0 +1,66 @@
+#!/usr/bin/env sh
+# Add on-premises configuration to existing .env file
+
+FILE="$(dirname "$0")/.env"
+
+if [ ! -f "$FILE" ]; then
+    echo "Error: .env file not found at $FILE"
+    echo "Please run './demo/generate_env' first to create the base .env file"
+    exit 1
+fi
+
+# Check if onprem config already exists
+if grep -q "ONPREM_SSH_PRIVATE_KEY" "$FILE"; then
+    echo "On-premises configuration already exists in .env file"
+    echo "Current on-premises settings:"
+    grep "^ONPREM_" "$FILE" || echo "No ONPREM_ settings found"
+    exit 0
+fi
+
+echo "Adding on-premises configuration to .env file..."
+
+cat >> "$FILE" << 'EOF'
+
+# On-premises provider configuration
+# Update these paths to match your SSH key locations
+ONPREM_SSH_PRIVATE_KEY=/home/ubuntu/.ssh/ubicloud_onprem
+ONPREM_SSH_PUBLIC_KEY="ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIYourPublicKeyHere ubicloud-onprem-access"
+
+# IPv6 configuration - adjust for your setup
+# Options:
+# - Native IPv6: 2001:db8:1234::/64 (from your ISP)
+# - HE Tunnel:   2001:470:xxxx::/64 (from tunnelbroker.net)
+# - ULA Testing: fd00:ubicloud:onprem::/64 (for testing only)
+ONPREM_IPV6_PREFIX=fd00:ubicloud:onprem::/48
+ONPREM_DEFAULT_IPV6_PREFIX=fd00:ubicloud:onprem::/48
+
+# Data center identification
+ONPREM_DATA_CENTER_NAME=home-lab-dc-01
+
+# Server identification (comma-separated if multiple)
+ONPREM_SERVER_IDENTIFIERS=server-01
+
+# Health monitoring
+ONPREM_HEALTH_CHECK_INTERVAL=300
+
+# Optional IPMI configuration (if available)
+ONPREM_ENABLE_IPMI=false
+# ONPREM_IPMI_HOST=192.168.1.100
+# ONPREM_IPMI_USER=admin
+# ONPREM_IPMI_PASSWORD=your-ipmi-password
+EOF
+
+echo "✅ On-premises configuration added to .env file"
+echo ""
+echo "📝 Next steps:"
+echo "1. Edit $FILE and update the following:"
+echo "   - ONPREM_SSH_PRIVATE_KEY: Path to your SSH private key"
+echo "   - ONPREM_SSH_PUBLIC_KEY: Your actual SSH public key"
+echo "   - ONPREM_IPV6_PREFIX: Your IPv6 subnet"
+echo "   - ONPREM_DATA_CENTER_NAME: Your data center name"
+echo ""
+echo "2. Generate SSH keys if you haven't already:"
+echo "   ssh-keygen -t ed25519 -f ~/.ssh/ubicloud_onprem"
+echo ""
+echo "3. Add your public key to your server:"
+echo "   ssh-copy-id -i ~/.ssh/ubicloud_onprem.pub root@YOUR_SERVER_IP"

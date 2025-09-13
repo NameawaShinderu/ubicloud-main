@@ -1,0 +1,62 @@
+#!/usr/bin/env ruby
+
+# frozen_string_literal: true
+
+require "fileutils"
+require "json"
+require "net/http"
+require "openssl"
+require "time"
+require "uri"
+
+if ARGV.count != 1
+  fail "Wrong number of arguments. Expected 1, Given #{ARGV.count}"
+end
+
+metrics_dir = ARGV[0]
+fail "Metrics directory does not exist: #{metrics_dir}" unless Dir.exist?(metrics_dir)
+
+fail "Metrics config file does not exist: #{metrics_dir}/config.json" unless File.exist?("#{metrics_dir}/config.json")
+
+# Create directories
+FileUtils.mkdir_p("#{metrics_dir}/pending")
+FileUtils.mkdir_p("#{metrics_dir}/done")
+
+# Clear the pending directory on startup (anything there is from a crash)
+Dir.children("#{metrics_dir}/pending").each { File.delete("#{metrics_dir}/pending/#{_1}") }
+
+# Parse config
+metrics_config_hash = JSON.parse(File.read("#{metrics_dir}/config.json"))
+endpoints = metrics_config_hash["endpoints"]
+max_file_retention = metrics_config_hash["max_file_retention"] || 100
+
+filename = Time.now.utc.strftime("%Y-%m-%dT%H-%M-%S-%6N")
+pending_file_path = "#{metrics_dir}/pending/#{filename}.txt"
+
+# Download content directly to the pending directory
+File.open(pending_file_path, "w") do |file|
+  endpoints.each do |endpoint|
+    uri = URI(endpoint)
+    http = Net::HTTP.new(uri.host, uri.port)
+    http.use_ssl = uri.scheme == "https"
+    http.verify_mode = OpenSSL::SSL::VERIFY_NONE # Equivalent to --insecure
+
+    response = http.get(uri.request_uri)
+    fail "HTTP request failed with status: #{response.code}" unless response.is_a?(Net::HTTPSuccess)
+    file.write(response.body)
+  end
+  file.flush
+  file.fsync
+end
+
+# Move complete file to "done" and make confirm rename persistence via
+# directory fsync.
+File.rename(pending_file_path, "#{metrics_dir}/done/#{filename}.txt")
+File.open("#{metrics_dir}/done") { _1.fsync }
+
+# Trim the done directory to keep only max_file_retention files
+done_files = Dir.children("#{metrics_dir}/done").sort
+num_files_to_remove = [done_files.count - max_file_retention, 0].max
+
+# Remove oldest files
+done_files.slice(0, num_files_to_remove).each { File.delete("#{metrics_dir}/done/#{_1}") }
