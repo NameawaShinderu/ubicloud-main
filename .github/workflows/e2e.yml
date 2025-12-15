@@ -25,13 +25,13 @@ jobs:
 
     steps:
     - name: Check out code
-      uses: actions/checkout@v5
+      uses: actions/checkout@v6
 
     - name: Set up Clover
       uses: ./.github/actions/setup-clover
 
     - name: Set up Node.js
-      uses: actions/setup-node@v5
+      uses: actions/setup-node@v6
       with:
         node-version-file: "package.json"
         cache: "npm"
@@ -138,7 +138,7 @@ jobs:
 
     - name: Upload logs
       if: always()
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: e2e-${{ github.run_id }}-logs
         path: foreman.log
